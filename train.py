@@ -2,11 +2,13 @@
 from pathlib import Path
 import torch
 from torch.utils.data import DataLoader, TensorDataset
+from torch.
 
 from src.cfg import RunConfig
 from src.builders import create_model
 from src.trainer import Trainer
 from src.utils.misc_utils import seed_everything
+from torch_geometric.data import Data
 
 
 def main():
@@ -21,6 +23,14 @@ def main():
 
     # TODO
     # Datasets and Dataloaders
+    # Load x_guide, x_target from hdf5, concat it as x,
+    
+    
+    data = Data(
+        x=x,              
+
+    )
+    
     
 
     # Model + Loss
@@ -30,7 +40,7 @@ def main():
     # Train
     trainer = Trainer(cfg, model, train_loader, val_loader, criterion=criterion)
     trainer.train()
-    
+
 
 if __name__ == "__main__":
     main()
