@@ -1,6 +1,6 @@
 python3 extract_features.py \
     --dataset_path ../data/train.csv \
-    --output_path ../data/seq_embeddings/train \
+    --output ../data/seq_embeddings/train \
     --device mps
 
 python3 extract_features.py \

@@ -22,5 +22,5 @@ python3 extract_features.py \
 # Train
 python3 extract_features.py \
     --dataset_path /cluster/projects/kumargroup/hayden/hackathon/data/train.csv \
-    --output_path /cluster/projects/kumargroup/hayden/hackathon/data/seq_embeddings/train \
+    --output /cluster/projects/kumargroup/hayden/hackathon/data/seq_embeddings/train \
     --device cuda
