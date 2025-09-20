@@ -1,0 +1,13 @@
+# VS Code
+.vscode/*
+
+# Mac OS Files
+**/.DS_Store
+**/._*
+
+# Builds
+.venv/*
+**/__pycache__/
+*.pyc
+build/
+**/*.egg-info
