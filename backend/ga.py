@@ -78,7 +78,12 @@ def predict_off_targets(guide: str):
         f.write(f"{guide} {MAX_MISMATCH}\n")
 
     ## Call the Cas-OFFinder executable
-    subprocess.run([CAS_OFFINDER_PATH, str(GUIDE_FILE), str(OFF_TARGETS_FILE)])
+    subprocess.run(
+        [CAS_OFFINDER_PATH, str(GUIDE_FILE), str(OFF_TARGETS_FILE)],
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
 
     ## Read the off-target outputs as a dataframe
     off_targets = pd.read_csv(
@@ -278,7 +283,6 @@ def anneal_mutation_rate(gen: int) -> float:
 
 def genetic_algorithm() -> Tuple[str, Dict]:
     # Initialize rotating offsets for off-target subsampling
-    off_targets = OFF_TARGETS_FULL
     offset = 0
 
     # Seed population
@@ -312,23 +316,13 @@ def genetic_algorithm() -> Tuple[str, Dict]:
     }
 
     for gen in range(GENERATIONS):
-        # Build the off-target mini-batch subset
-        if ROTATE_OFFSETS:
-            start = (offset + gen * OFF_BATCH_SIZE) % max(1, len(off_targets))
-            subset = [
-                off_targets[(start + i) % len(off_targets)]
-                for i in range(min(OFF_BATCH_SIZE, len(off_targets)))
-            ]
-        else:
-            subset = random.sample(
-                off_targets, min(OFF_BATCH_SIZE, len(off_targets))
-            )
-
+        print(f"Generation {gen+1}/{GENERATIONS}")
         # Evaluate population
         scores: Dict[str, float] = {}
         comps: Dict[str, Tuple[float, float, float, float]] = {}
         for g in population:
-            fit, on, off, pen = fitness_components(g, subset)
+            off_targets = predict_off_targets(g)
+            fit, on, off, pen = fitness_components(g, off_targets)
             scores[g] = fit
             comps[g] = (fit, on, off, pen)
 
@@ -390,7 +384,7 @@ def genetic_algorithm() -> Tuple[str, Dict]:
 
     # Final thorough evaluation on full off-targets for the best
     fit_final, on_final, off_final, pen_final = fitness_components(
-        best_global[1], OFF_TARGETS_FULL
+        best_global[1], best_global[3]
     )
     best_global = (fit_final, best_global[1], on_final, off_final, pen_final)
     return best_global[1], {"summary": best_global, "logs": logs}
@@ -434,7 +428,6 @@ def run_ga_stream(params: Dict[str, Any] = None) -> Iterable[Dict[str, Any]]:
             INTENDED_TARGET = str(params["target_sequence"])[:SEQUENCE_LENGTH]
 
     # Copy of your genetic_algorithm loop, but yielding each gen’s snapshot.
-    off_targets = OFF_TARGETS_FULL
     offset = 0
 
     population = []
@@ -462,18 +455,12 @@ def run_ga_stream(params: Dict[str, Any] = None) -> Iterable[Dict[str, Any]]:
     }
 
     for gen in range(GENERATIONS):
-        # rotating off-target subset
-        start = (offset + gen * OFF_BATCH_SIZE) % max(1, len(off_targets))
-        subset = [
-            off_targets[(start + i) % len(off_targets)]
-            for i in range(min(OFF_BATCH_SIZE, len(off_targets)))
-        ]
-
         # evaluate
         scores = {}
         comps = {}
         for g in population:
-            fit, on, off, pen = fitness_components(g, subset)
+            off_targets = predict_off_targets(g)
+            fit, on, off, pen = fitness_components(g, off_targets)
             scores[g] = fit
             comps[g] = (fit, on, off, pen)
 
@@ -561,7 +548,7 @@ def run_ga_stream(params: Dict[str, Any] = None) -> Iterable[Dict[str, Any]]:
 
     # final thorough eval on full off-targets for the best
     fit_final, on_final, off_final, pen_final = fitness_components(
-        best_global[1], OFF_TARGETS_FULL
+        best_global[1], best_global[3]
     )
 
     # Also get the subset-based fitness for consistency with training
@@ -599,3 +586,8 @@ def run_ga_stream(params: Dict[str, Any] = None) -> Iterable[Dict[str, Any]]:
         "training_fitness": fit_subset,  # Make the distinction clear
         "done": True,
     }
+
+
+if __name__ == "__main__":
+    # run ga without server for quick test
+    genetic_algorithm()
