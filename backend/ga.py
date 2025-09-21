@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 import os
 import random
-from typing import List, Tuple, Dict, Iterable
+from typing import List, Tuple, Dict, Iterable, Any
 import math
 import subprocess
 from pathlib import Path
 import pandas as pd
+import time
 
 # GA Hyperparameters
 POPULATION_SIZE = 100
@@ -405,3 +406,196 @@ if __name__ == "__main__":
         f" {pen:.4f}"
     )
     print("Logs keys:", list(info["logs"].keys()))
+
+
+def _logo_counts(population, top_k=40):
+    # frequency counts for sequence logo
+    if not population:
+        return {}
+    top = population[:top_k]
+    L = len(top[0])
+    counts = [dict(A=0, C=0, G=0, T=0) for _ in range(L)]
+    for seq in top:
+        for i, ch in enumerate(seq):
+            counts[i][ch] += 1
+    # shape as { "0": {"A":n,...}, "1": {...}, ... }
+    return {str(i): counts[i] for i in range(L)}
+
+
+def run_ga_stream(params: Dict[str, Any] = None) -> Iterable[Dict[str, Any]]:
+    """Yields a JSON-serializable dict per generation and a final 'done' frame."""
+    global POPULATION_SIZE, GENERATIONS, LAMBDA, INTENDED_TARGET
+    if params:
+        POPULATION_SIZE = int(params.get("population_size", POPULATION_SIZE))
+        GENERATIONS = int(params.get("generations", GENERATIONS))
+        LAMBDA = float(params.get("lambda", LAMBDA))
+        # Update intended target if provided
+        if "target_sequence" in params:
+            INTENDED_TARGET = str(params["target_sequence"])[:SEQUENCE_LENGTH]
+
+    # Copy of your genetic_algorithm loop, but yielding each gen’s snapshot.
+    off_targets = OFF_TARGETS_FULL
+    offset = 0
+
+    population = []
+    retry_budget = 2000
+    while len(population) < POPULATION_SIZE and retry_budget > 0:
+        cand = random_seq(SEQUENCE_LENGTH)
+        if all(hamming(cand, ex) >= MINIMUM_HAMMING for ex in population):
+            population.append(cand)
+        else:
+            retry_budget -= 1
+    if len(population) < POPULATION_SIZE:
+        population.extend(
+            random_seq(SEQUENCE_LENGTH)
+            for _ in range(POPULATION_SIZE - len(population))
+        )
+
+    best_global = None  # (fit, seq, on, off, pen)
+    logs = {
+        "best_fit": [],
+        "mean_fit": [],
+        "best_on": [],
+        "best_off": [],
+        "best_gc": [],
+        "diversity": [],
+    }
+
+    for gen in range(GENERATIONS):
+        # rotating off-target subset
+        start = (offset + gen * OFF_BATCH_SIZE) % max(1, len(off_targets))
+        subset = [
+            off_targets[(start + i) % len(off_targets)]
+            for i in range(min(OFF_BATCH_SIZE, len(off_targets)))
+        ]
+
+        # evaluate
+        scores = {}
+        comps = {}
+        for g in population:
+            fit, on, off, pen = fitness_components(g, subset)
+            scores[g] = fit
+            comps[g] = (fit, on, off, pen)
+
+        sorted_pop = sorted(population, key=lambda z: scores[z], reverse=True)
+        best = sorted_pop[0]
+        best_fit, best_on, best_off, best_pen = comps[best]
+        mean_fit = sum(scores[g] for g in population) / len(population)
+
+        logs["best_fit"].append(best_fit)
+        logs["mean_fit"].append(mean_fit)
+        logs["best_on"].append(best_on)
+        logs["best_off"].append(best_off)
+        logs["best_gc"].append(gc_content(best))
+        logs["diversity"].append(mean_hamming(population))
+
+        if (best_global is None) or (best_fit > best_global[0]):
+            best_global = (best_fit, best, best_on, best_off, best_pen)
+
+        # emit frame for this generation
+        yield {
+            "gen": gen,
+            "summary": {
+                "best_fit": best_fit,
+                "mean_fit": mean_fit,
+                "best_on": best_on,
+                "best_off": best_off,
+                "best_gc": gc_content(best),
+                "diversity_hamming": mean_hamming(population),
+                "mutation_rate": anneal_mutation_rate(gen),
+                "crossover_rate": CROSSOVER_RATE,
+            },
+            "top": [
+                {
+                    "id": f"g_{gen}_{i:03d}",
+                    "seq": s,
+                    "fit": float(scores[s]),
+                    "on": float(comps[s][1]),
+                    "off": float(comps[s][2]),
+                    "gc": gc_content(s),
+                }
+                for i, s in enumerate(sorted_pop[: min(20, len(sorted_pop))])
+            ],
+            "pareto": [
+                {
+                    "id": f"p_{gen}_{i:03d}",
+                    "on": float(comps[s][1]),
+                    "off": float(comps[s][2]),
+                }
+                for i, s in enumerate(sorted_pop[: min(100, len(sorted_pop))])
+            ],
+            "logo_counts": _logo_counts(sorted_pop, top_k=40),
+            "off_subset_meta": {"k": OFFTARGET_TOPK, "agg": "top_k_mean"},
+            "done": False,
+        }
+
+        # next generation (same as your code)
+        new_pop = []
+        if ELITISM:
+            new_pop.extend(sorted_pop[:ELITISM_COUNT])
+        mut_rate = anneal_mutation_rate(gen)
+        retry_budget_children = 2000
+        while len(new_pop) < POPULATION_SIZE and retry_budget_children > 0:
+            p1 = tournament_select(population, scores)
+            p2 = tournament_select(population, scores)
+            c1, c2 = crossover(p1, p2)
+            c1 = mutate(repair(c1), mut_rate)
+            c2 = mutate(repair(c2), mut_rate)
+            appended = 0
+            if all(hamming(c1, ex) >= MINIMUM_HAMMING for ex in new_pop):
+                new_pop.append(c1)
+                appended += 1
+            if len(new_pop) < POPULATION_SIZE and all(
+                hamming(c2, ex) >= MINIMUM_HAMMING for ex in new_pop
+            ):
+                new_pop.append(c2)
+                appended += 1
+            if appended == 0:
+                retry_budget_children -= 1
+        if len(new_pop) < POPULATION_SIZE:
+            while len(new_pop) < POPULATION_SIZE:
+                new_pop.append(random_seq(SEQUENCE_LENGTH))
+        population = new_pop
+        # (Optional) small sleep to throttle stream in dev
+        # time.sleep(0.02)
+
+    # final thorough eval on full off-targets for the best
+    fit_final, on_final, off_final, pen_final = fitness_components(
+        best_global[1], OFF_TARGETS_FULL
+    )
+
+    # Also get the subset-based fitness for consistency with training
+    final_subset_start = (offset + (GENERATIONS - 1) * OFF_BATCH_SIZE) % max(
+        1, len(off_targets)
+    )
+    final_subset = [
+        off_targets[(final_subset_start + i) % len(off_targets)]
+        for i in range(min(OFF_BATCH_SIZE, len(off_targets)))
+    ]
+    fit_subset, _, _, _ = fitness_components(best_global[1], final_subset)
+
+    yield {
+        "gen": GENERATIONS,
+        "summary": {
+            "best_fit": (
+                fit_subset
+            ),  # Use subset fitness for consistency with training
+            "mean_fit": logs["mean_fit"][-1],
+            "best_on": (
+                on_final
+            ),  # Use full eval for on-target (doesn't change)
+            "best_off": (
+                off_final
+            ),  # Use full eval for off-target (final validation)
+            "best_gc": gc_content(best_global[1]),
+            "diversity_hamming": logs["diversity"][-1],
+            "mutation_rate": anneal_mutation_rate(GENERATIONS - 1),
+            "crossover_rate": CROSSOVER_RATE,
+        },
+        "best_sequence": best_global[1],
+        "validation_fitness": (
+            fit_final
+        ),  # Add full dataset fitness as separate field
+        "training_fitness": fit_subset,  # Make the distinction clear
+        "done": True,
+    }
