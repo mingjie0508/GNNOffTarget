@@ -6,6 +6,10 @@ import math
 import subprocess
 from pathlib import Path
 import pandas as pd
+# Mingjie: import
+import torch
+from model import TransformerClassifier
+
 
 # GA Hyperparameters
 POPULATION_SIZE = 100
@@ -46,27 +50,66 @@ MAX_MISMATCH = 3
 # Path to Cas-OFFinder executable
 CAS_OFFINDER_PATH = PARENT_DIR / 'src/cas-offinder'
 
+# Mingjie: model
+SQN_EMBED_MODEL = 'zhihan1996/DNABERT-S'
+SQN_EMBED_LOAD_LOCAL = True # TODO: change this to False to download model from huggingface
+SQN_EMBED_DIM = 768
+FEED_FORWARD_DIM = 64
+CHECKPOINT_PATH = 'checkpoints/dnabert_cfd.pth'
+PRED_PATH = 'data/test_new_predict.csv'
+
+# Mingjie: model configuration
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+SEED = 1
+BATCH_SIZE = 256
+DROPOUT = 0.0
+EPOCHS = 1
+LR = 1e-4
+WEIGHT_DECAY = 0.0
+
+# Mingjie: model
+classifier = TransformerClassifier(
+    embed_model=SQN_EMBED_MODEL,
+    embedding_dim=SQN_EMBED_DIM,
+    dim_feedforward=FEED_FORWARD_DIM,
+    dropout=DROPOUT,
+    local_files_only=SQN_EMBED_LOAD_LOCAL
+)
+classifier = classifier.to(DEVICE)
+
+# checkpoint path
+checkpoint = torch.load(CHECKPOINT_PATH, weights_only=False)
+classifier.load_state_dict(checkpoint['model'], strict=False)
+classifier.eval()
+
+
 # Surrogate model hooks
 def predict_prob_on_target(guide: str, target: str) -> float:
     """Return model-predicted probability guide cuts intended target.
     TODO: Replace with your trained regression model inference.
     """
-    matches = sum(1 for a, b in zip(guide[-8:], target[-8:]) if a == b)
-    return min(1.0, 0.1 + 0.1 * matches)
+    x = [guide + '[SEP]' + target]
+
+    with torch.no_grad():
+        pred = classifier(x)
+        score = pred.item()
+        print('Predicted off-target score (higher more significant):', score)
+    # matches = sum(1 for a, b in zip(guide[-8:], target[-8:]) if a == b)
+    return score
 
 
 def predict_prob_off_target(guide: str, target: str) -> float:
     """Return model-predicted probability guide cuts an off-target.
     TODO: Replace with your trained regression model inference.
     """
+    x = [guide + '[SEP]' + target]
 
-    # Use Hayden's model
-
-
-
-    mismatches = sum(1 for a, b in zip(guide, target) if a != b)
-    return max(0.0, 0.4 - 0.03 * (SEQUENCE_LENGTH - mismatches))
-
+    with torch.no_grad():
+        pred = classifier(x)
+        score = pred.item()
+        print('Predicted off-target score (higher more significant):', score)
+    # mismatches = sum(1 for a, b in zip(guide, target) if a != b)
+    return score
 
 
 def predict_off_targets(guide: str):

@@ -13,12 +13,14 @@ References:
 - https://www.biorxiv.org/content/10.1101/2022.04.21.488824v3
 
 '''
-import sys
-sys.path.append('/Users/sophiali/Desktop/crisproff')
+
 from CRISPRspec_CRISPRoff_pipeline import compute_CRISPRspec, calcRNADNAenergy
 import argparse
 import pickle
 import pandas as pd
+
+
+# =====| CRISPRoff Score Implementation |=======================================
 
 def compute_crispr_off_score(sg, wt):
 
@@ -27,7 +29,7 @@ def compute_crispr_off_score(sg, wt):
 
 # =====| CFD Score Implementation |=============================================
 
-def compute_cfd_score_e(sg, wt, pam, mm_scores, pam_scores):
+def compute_cfd_score_e(sg, wt, mm_scores):
     """
     Parameters
     - sg : sgRNA (guide RNA) sequence
@@ -39,13 +41,11 @@ def compute_cfd_score_e(sg, wt, pam, mm_scores, pam_scores):
     - CFD score
     """
     
-    ## Normalize the nucleotides to RNA convention
+    ## Normalize the nucleotides to RNA convention and truncate PAM if present
     wt = wt.replace('T', 'U')
     sg = sg.replace('T', 'U')
-
     wt = wt[:20]
     sg = sg[:20]
-
     wt_list = list(wt)
     sg_list = list(sg)
 
@@ -57,15 +57,14 @@ def compute_cfd_score_e(sg, wt, pam, mm_scores, pam_scores):
         if sg_list[i] == wl:
             score *= 1
         else:
-            try:
-                # Fetch the penalty from the mismatch lookup table
-                key = 'r'+sg_list[i]+':d'+revcom(wl)+','+str(i+1)
-                score += mm_scores[key]
-            except KeyError:
-                continue
+            # Fetch the penalty from the mismatch lookup table
+            key = 'r' + sg_list[i] + ':d' + revcom(wl)
+            position = str(i+1)
+            penalty = mm_scores.get((key, position), 1)
+            score *= penalty
 
     ## Multiply the score by the PAM penalty in the lookup table
-    score *= pam_scores.get(pam, pam_scores.get("OTHERS", 1.0))
+    #score *= pam_scores.get(pam, pam_scores.get("OTHERS", 1.0))
     return score
     
 def revcom(s):
@@ -76,10 +75,14 @@ def revcom(s):
     return ''.join(letters)
 
 def get_mismatch_scores(mms_path):
-    # Returns a dictionary of mismatch scores given the path
+    # Returns a dataframe of mismatch scores given the path
     try:
-        return pickle.load(open(mms_path, 'rb'))
-    except:
+        mm_scores = pd.read_excel(mms_path)
+        return {
+            (row['Mismatch Type'], str(row['Position'])): row['Percent-Active'] 
+            for _, row in mm_scores.iterrows()
+        }
+    except: 
         raise Exception("Could not find file with mismatch scores.)")
     
 def get_pam_scores(pam_path):
@@ -91,13 +94,13 @@ def get_pam_scores(pam_path):
     
 ## Curry the penalty matrices for convenience
 PAM_PKL = "data/CFD_score/PAM_scores.pkl"
-MMS_PKL = "data/CFD_score/mismatch_score.pkl"
+MMS_PKL = "data/CFD_score/mismatch_scores.xlsx"
 
 mm_scores = get_mismatch_scores(MMS_PKL)
 pam_scores = get_pam_scores(PAM_PKL)
 
-compute_cfd_score = lambda sg, wt, pam: compute_cfd_score_e(
-    sg, wt, pam, mm_scores, pam_scores
+compute_cfd_score = lambda sg, wt: compute_cfd_score_e(
+    sg, wt, mm_scores
 )
 
 def parse_args():
@@ -117,6 +120,9 @@ if __name__ == '__main__':
     train = pd.read_csv(args.train_path)
     test = pd.read_csv(args.test_path)
 
+    print("Train: ", train.shape)
+    print("Test: ", test.shape)
+
     ## Standardize score columns to CRISPRoff score
     train = train.rename(columns = {'score': 'crispr_off_score'})
     test = test.rename(columns = {'score': 'crispr_off_score'})
@@ -128,19 +134,23 @@ if __name__ == '__main__':
         ) if pd.isna(row['crispr_off_score']) else row['crispr_off_score'],
         axis = 1
     )
+    print("Completed generated CRISPRoff score for train")
     test['crispr_off_score'] = test.apply(
         lambda row: compute_crispr_off_score(
             row['guide_sequence'], row['target_sequence']
         ) if pd.isna(row['crispr_off_score']) else row['crispr_off_score'],
         axis = 1
     )
+    print("Completed generated CRISPRoff score for test")
 
     ## Generate missing CFD scores (or all if none)
     train['cfd_score'] = train.apply(lambda row: compute_cfd_score(
-        row['guide_sequence'], row['target_sequence'], row['pam']), axis = 1)
+        row['guide_sequence'], row['target_sequence']), axis = 1)
+    print("Completed generated CFD score for train")
     test['cfd_score'] = test.apply(lambda row: compute_cfd_score(
-        row['guide_sequence'], row['target_sequence'], row['pam']), axis = 1)
-    
+        row['guide_sequence'], row['target_sequence']), axis = 1)
+    print("Completed generated CFD score for test")
+
     # Standardize column-order
     order = [
         'guide_sequence', 'target_sequence', 'identity', 'strand', 
