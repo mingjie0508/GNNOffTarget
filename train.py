@@ -4,7 +4,7 @@ import torch
 from torch.utils.data import DataLoader, TensorDataset
 
 from src.cfg import RunConfig
-from src.builders import create_model
+from src.builders import create_model, create_optimizer
 from src.trainer import Trainer
 from src.utils.misc_utils import seed_everything
 from torch_geometric.data import Data
@@ -15,7 +15,7 @@ import pandas as pd
 import json
 
 from src.dataset import CRISPRoffTDataset
-from src.utils.data_utils import get_splits
+from src.utils.data_utils import get_splits, fit_num_scaler, get_collate_fn
 
 
 def main(args):
@@ -45,13 +45,17 @@ def main(args):
     val_ds = CRISPRoffTDataset(cfg, val_idx, vocabs=train_ds.vocabs)
     test_ds = CRISPRoffTDataset(cfg, test_idx, vocabs=train_ds.vocabs)
 
-    train_loader = DataLoader(train_ds, batch_size=cfg.train.batch_size, shuffle=True)
-    val_loader = DataLoader(val_ds, batch_size=cfg.train.batch_size, shuffle=True)
-    test_loader = DataLoader(test_ds, batch_size=cfg.train.batch_size, shuffle=True)
+    num_scaler = fit_num_scaler(train_ds.X_num)
+    collate_fn = get_collate_fn(num_scaler)
+
+    train_loader = DataLoader(train_ds, batch_size=cfg.train.batch_size, shuffle=True, collate_fn=collate_fn)
+    val_loader = DataLoader(val_ds, batch_size=cfg.train.batch_size, shuffle=True, collate_fn=collate_fn)
+    test_loader = DataLoader(test_ds, batch_size=cfg.train.batch_size, shuffle=True, collate_fn=collate_fn)
 
     # Model + Loss
-    model = create_model(cfg)
-    criterion = torch.nn.CrossEntropyLoss()
+    model = create_model(cfg, train_ds.vocabs)
+    optim = create_optimizer(model, cfg)
+    criterion = torch.nn.MSELoss()
 
     # Train
     trainer = Trainer(cfg, model, train_loader, val_loader, criterion=criterion)

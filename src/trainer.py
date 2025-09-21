@@ -1,6 +1,5 @@
-from __future__ import annotations
 from pathlib import Path
-from typing import Optional, Dict
+from typing import Optional
 import torch
 from torch import nn
 from torch.optim import Optimizer
@@ -13,8 +12,8 @@ class FitState:
     def __init__(self):
         self.epoch: int = 0
         self.global_step: int = 0
-        self.metrics: Dict[str, float] = {}
-        self.best_metric: Optional[Dict[str, float]] = None
+        self.metrics: dict[str, float] = {}
+        self.best_metric: Optional[dict[str, float]] = None
         self.best_epoch: Optional[int] = None
 
 
@@ -43,16 +42,17 @@ class Trainer:
         val_loader: DataLoader,
         *,
         criterion: nn.Module,
-        optimizer: Optional[Optimizer] = None,
-        out_dir: Optional[Path] = None,
+        optimizer: Optimizer,
     ):
         self.cfg = cfg
-        self.model = model.to(cfg.train.device)
+        self.device = cfg.train.device
+        self.out_dir = cfg.output_dir
+        
+        self.model = model.to(self.device)
         self.train_loader = train_loader
         self.val_loader = val_loader
         self.criterion = criterion
-        self.out_dir = out_dir or cfg.paths.out_dir
-        self.optimizer = optimizer or create_optimizer(self.model, cfg.train.optim)
+        self.optimizer = optimizer
         self.state = FitState()
 
     def train(self) -> FitState:
@@ -77,7 +77,49 @@ class Trainer:
 
         return self.state
 
-    def _train_one_epoch(self, epoch: int) -> Dict[str, float]:
+    def _run_one_epoch(self, loader: DataLoader, train: bool) -> tuple[float, float]:
+        """Run one epoch and return average metrics."""
+
+        if train:
+            self.model.train()
+        else:
+            self.model.eval()
+
+        total_loss, total_mse = 0.0, 0.0
+        num_batches = 0
+        optim = self.optimizer
+        criterion = self.criterion
+
+        for batch in loader:
+            x_seq, x_num, x_chr, x_strand, x_cas9, x_source, y = (b.to(self.device) for b in batch)
+            
+
+            if train:
+                optim.zero_grad()
+
+            with torch.cuda.amp.autocast(enabled=(scaler is not None and scaler.is_enabled())):
+                preds = self.model(x_seq, x_num, x_chr, x_strand, x_cas9, x_source)
+                loss = criterion(preds, y)
+
+            if train:
+                if scaler is not None and scaler.is_enabled():
+                    scaler.scale(loss).backward()
+                    scaler.step(optim)
+                    scaler.update()
+                else:
+                    loss.backward()
+                    optim.step()
+                self.state.global_step += 1
+
+            total_loss += loss.detach().item() * y.size(0)
+            total_mae  += (preds.detach() - y).abs().sum().item()
+            n += y.size(0)
+
+        avg_loss = total_loss / max(n, 1)
+        avg_mae  = total_mae  / max(n, 1)
+        return avg_loss, avg_mae
+
+    def _train_one_epoch(self, epoch: int) -> tuple[float, float]:
         """Train for one epoch and return average metrics."""
 
         self.model.train()
@@ -105,7 +147,7 @@ class Trainer:
         avg_loss = total_loss / num_batches
         return {"loss": avg_loss}
 
-    def _validate_one_epoch(self, epoch: int) -> Dict[str, float]:
+    def _validate_one_epoch(self, epoch: int) -> tuple[float, float]:
         """Validate for one epoch and return average metrics."""
         self.model.eval()
         total_loss = 0.0
@@ -125,7 +167,7 @@ class Trainer:
         avg_val_loss = total_loss / num_batches
         return {"val_loss": avg_val_loss}
 
-    def _print_epoch_line(self, epoch: int, metrics: Dict[str, float]) -> None:
+    def _print_epoch_line(self, epoch: int, metrics: dict[str, float]) -> None:
         if metrics:
             line = f"[Epoch {epoch}] " + " ".join(
                 f"{k}={v:.4f}" for k, v in metrics.items()

@@ -5,29 +5,19 @@ from torch import nn
 from torch.optim import Optimizer, AdamW
 from torch.utils.data import DataLoader
 from .cfg import RunConfig, OptimConfig
-from .gnn import GCNLinkPredictor, GATLinkPredictor
+from models.fcnn import FCNNRegressor
 
 
-def create_model(cfg: RunConfig) -> nn.Module:
-    m = cfg.model
-
-    if m.name.lower() == "gcn":
-        return GCNLinkPredictor(
-            m.in_channels,
-            m.hidden_channels,
-            m.out_channels,
-            m.dropout,
-        )
-    elif m.name.lower() == "gat":
-        return GATLinkPredictor(
-            m.in_channels,
-            m.hidden_channels,
-            m.out_channels,
-            heads=m.heads,
-            dropout=m.dropout,
-        )
-    else:
-        raise NotImplementedError(f"Unknown model: {m.name}")
+def create_model(cfg: RunConfig, vocabs: dict) -> nn.Module:
+    return FCNNRegressor(
+        vocabs=vocabs,
+        seq_in_dim=cfg.model.seq_in_dim,
+        num_in_dim=cfg.model.num_in_dim,
+        cat_in_dims=cfg.model.cat_in_dims,
+        metadata_out_dim=cfg.model.metadata_out_dim,
+        hidden_dim=cfg.model.hidden_dim,
+        dropout=cfg.model.dropout,
+    )
 
 
 def create_optimizer(model: nn.Module, cfg: OptimConfig) -> Optimizer:

@@ -6,6 +6,8 @@ import torch
 from torch.utils.data import Dataset
 from .cfg import RunConfig
 
+from sklearn.preprocessing import StandardScaler
+
 
 def _cat_to_index(series: pd.Series, vocab: list = None):
     """
@@ -33,12 +35,6 @@ def _cat_to_index(series: pd.Series, vocab: list = None):
     return codes, vocab
 
 
-def _zscore(t):
-    m = torch.nanmean(t)
-    s = torch.nanstd(t).clamp_min(1e-6)
-    return (t - m) / s
-
-
 class CRISPRoffTDataset(Dataset):
     """
     Wraps guide/target embeddings + selected metadata into a PyTorch Dataset.
@@ -57,12 +53,7 @@ class CRISPRoffTDataset(Dataset):
 
     CAT_KEYS = ["chr", "strand", "cas9_type", "source"]
 
-    def __init__(
-        self,
-        cfg: RunConfig,
-        idxs: list[int] | None = None,
-        vocabs: dict = {}
-    ):
+    def __init__(self, cfg: RunConfig, idxs: list[int] | None = None, vocabs: dict = {}):
         super().__init__()
 
         guide_path = cfg.data.guide_seq_path
@@ -96,8 +87,8 @@ class CRISPRoffTDataset(Dataset):
         self.y = self.y[idxs]
 
         # Numerical: start, end
-        start_bp = _zscore(metadata["start"].astype(np.float32).to_numpy())
-        end_bp = _zscore(metadata["end"].astype(np.float32).to_numpy())
+        start_bp = metadata["start"].astype(np.float32).to_numpy()
+        end_bp = metadata["end"].astype(np.float32).to_numpy()
         self.X_num = np.stack([start_bp, end_bp], axis=1).astype(np.float32)  # [N, 2]
 
         # Categoricals: chr, strand, cas9_type, source
