@@ -11,7 +11,6 @@ Description: Generates MIT score which predicts the likelihood that the Cas9
 
 References:
 - https://www.biorxiv.org/content/10.1101/2022.04.21.488824v3
-
 '''
 
 from CRISPRspec_CRISPRoff_pipeline import compute_CRISPRspec, calcRNADNAenergy
@@ -34,9 +33,7 @@ def compute_cfd_score_e(sg, wt, mm_scores):
     Parameters
     - sg : sgRNA (guide RNA) sequence
     - wt : the candidate off-target sequence (same length as sg)
-    - pam : the PAM sequence adjacent to the off-target
     - mm_scores: mismatch penalties
-    - pam_scores: PAM penalties
     Returns
     - CFD score
     """
@@ -63,8 +60,6 @@ def compute_cfd_score_e(sg, wt, mm_scores):
             penalty = mm_scores.get((key, position), 1)
             score *= penalty
 
-    ## Multiply the score by the PAM penalty in the lookup table
-    #score *= pam_scores.get(pam, pam_scores.get("OTHERS", 1.0))
     return score
     
 def revcom(s):
