@@ -36,16 +36,17 @@ ROTATE_OFFSETS = True  # rotate subset generation-by-generation
 
 # FASTA format whole-genome reference for homo sapiens
 PARENT_DIR = Path(__file__).resolve().parent.parent
-REFERENCE_GENOME = Path(os.path.join(PARENT_DIR, 'data/cas_offinder/hg38.fa'))
-GUIDE_FILE = Path(os.path.join(PARENT_DIR, 'data/cas_offinder/guide.txt'))
+REFERENCE_GENOME = Path(os.path.join(PARENT_DIR, "data/cas_offinder/hg38.fa"))
+GUIDE_FILE = Path(os.path.join(PARENT_DIR, "data/cas_offinder/guide.txt"))
 OFF_TARGETS_FILE = Path(
-    os.path.join('./', PARENT_DIR, 'data/cas_offinder/off_targets.txt')
+    os.path.join("./", PARENT_DIR, "data/cas_offinder/off_targets.txt")
 )
-PAM = 'NGG'
+PAM = "NGG"
 MAX_MISMATCH = 3
 
 # Path to Cas-OFFinder executable
-CAS_OFFINDER_PATH = PARENT_DIR / 'src/cas-offinder'
+CAS_OFFINDER_PATH = PARENT_DIR / "src/cas-offinder"
+
 
 # Surrogate model hooks
 def predict_prob_on_target(guide: str, target: str) -> float:
@@ -63,32 +64,31 @@ def predict_prob_off_target(guide: str, target: str) -> float:
 
     # Use Hayden's model
 
-
-
     mismatches = sum(1 for a, b in zip(guide, target) if a != b)
     return max(0.0, 0.4 - 0.03 * (SEQUENCE_LENGTH - mismatches))
-
 
 
 def predict_off_targets(guide: str):
     # Returns a dataframe of potential off targets
 
     ## Write the guide RNA to a text file
-    with GUIDE_FILE.open('w') as f:
+    with GUIDE_FILE.open("w") as f:
         f.write(f"{REFERENCE_GENOME}\n")
         f.write(f"{PAM}\n")
-        f.write(f"{guide} {MAX_MISMATCH}\N")
+        f.write(f"{guide} {MAX_MISMATCH}\n")
 
     ## Call the Cas-OFFinder executable
     subprocess.run([CAS_OFFINDER_PATH, str(GUIDE_FILE), str(OFF_TARGETS_FILE)])
 
     ## Read the off-target outputs as a dataframe
     off_targets = pd.read_csv(
-        OFF_TARGETS_FILE, sep = '\t', header = None,
-        names = ["chrom", "position", "strand", "target_seq", "mismatches"]
+        OFF_TARGETS_FILE,
+        sep="\t",
+        header=None,
+        names=["chrom", "position", "strand", "target_seq", "mismatches"],
     )
-    off_targets['position'] = off_targets['position'].astype(int)
-    off_targets['mismatches'] = off_targets['mismatches'].astype(int)
+    off_targets["position"] = off_targets["position"].astype(int)
+    off_targets["mismatches"] = off_targets["mismatches"].astype(int)
 
     return off_targets
 
