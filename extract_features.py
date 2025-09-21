@@ -14,12 +14,8 @@ from pathlib import Path
 def main(args):
     EMBED_MODEL_NAME = "zhihan1996/DNABERT-S"
 
-    tokenizer = AutoTokenizer.from_pretrained(
-        EMBED_MODEL_NAME, local_files_only=False, trust_remote_code=True
-    )
-    model = AutoModel.from_pretrained(
-        EMBED_MODEL_NAME, local_files_only=False, trust_remote_code=True
-    )
+    tokenizer = AutoTokenizer.from_pretrained(EMBED_MODEL_NAME, local_files_only=False, trust_remote_code=True)
+    model = AutoModel.from_pretrained(EMBED_MODEL_NAME, local_files_only=False, trust_remote_code=True)
 
     model.to(args.device)
 
@@ -30,21 +26,21 @@ def main(args):
     guide_emb = []
     target_emb = []
 
-    for seq in tqdm(guide_seg, desc="Embedding Guide Sequence"):
-        inputs = tokenizer(seq, return_tensors="pt")["input_ids"]
-        inputs = inputs.to(args.device)
-        hidden_states = model(inputs)[0]
+    for i in tqdm(range(0, len(guide_seg), args.batch_size), desc="Embedding Guide Sequence"):
+        batch_seqs = guide_seg[i : i + args.batch_size]
+        x = tokenizer(batch_seqs, return_tensors="pt", padding=True)["input_ids"].to(args.device)
+        x = model(x)[0]
+        embs = x.mean(dim=1)
 
-        embedding_mean = torch.mean(hidden_states[0], dim=0)
-        guide_emb.append(embedding_mean.detach().cpu().numpy())
+        guide_emb.extend(embs.detach().cpu().numpy())
 
-    for seq in tqdm(target_seq, desc="Embedding Target Sequence"):
-        inputs = tokenizer(seq, return_tensors="pt")["input_ids"]
-        inputs = inputs.to(args.device)
-        hidden_states = model(inputs)[0]
+    for i in tqdm(range(0, len(target_seq), args.batch_size), desc="Embedding Target Sequence"):
+        batch_seqs = target_seq[i : i + args.batch_size]
+        x = tokenizer(batch_seqs, return_tensors="pt", padding=True)["input_ids"].to(args.device)
+        x = model(x)[0]
+        embs = x.mean(dim=1)
 
-        embedding_mean = torch.mean(hidden_states[0], dim=0)
-        target_emb.append(embedding_mean.detach().cpu().numpy())
+        target_emb.extend(embs.detach().cpu().numpy())
 
     os.makedirs(args.output, exist_ok=True)
     np.save(Path(args.output) / "guide_emb.npy", np.array(guide_emb).astype("float32"))
@@ -55,6 +51,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
     parser.add_argument("--dataset_path", type=str)
+    parser.add_argument("--batch_size", type=int, default=128)
     parser.add_argument("--device", type=str, default="mps")
     parser.add_argument("--output", type=str, default="seq_embeddings")
 
