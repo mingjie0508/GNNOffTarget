@@ -11,6 +11,7 @@ class OptimConfig:
 @dataclass
 class TrainConfig:
     epochs: int = 10
+    batch_size: int = 128
     device: str = "cuda"
     optim: OptimConfig = field(default_factory=OptimConfig)
 
@@ -27,18 +28,19 @@ class ModelConfig:
 
 @dataclass
 class DataConfig:
-    root: Path = Path("data")
-    batch_size: int = 32
-    num_workers: int = 4
+    guide_seq_path: Path = Path()
+    target_seq_path: Path = Path()
+    metadata_path: Path = Path()
+    vocab_path: Path | None = None
+    
 
 @dataclass
 class PathsConfig:
-    out_dir: Path = Path("outputs/")
+    output_dir: Path = Path()
 
 @dataclass
 class RunConfig:
     seed: int = 2025
-    model_name: str = "GCN"
     train: TrainConfig = field(default_factory=TrainConfig)
     data: DataConfig = field(default_factory=DataConfig)
     paths: PathsConfig = field(default_factory=PathsConfig)

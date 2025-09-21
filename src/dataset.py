@@ -1,61 +1,127 @@
-import os
+import json
+import numpy as np
+import pandas as pd
 import torch
-from torch_geometric.data import Dataset, Data
+
+from torch.utils.data import Dataset
+from .cfg import RunConfig
+
+
+def _cat_to_index(series: pd.Series, vocab: list = None):
+    """
+    Map a categorical series to integer indices with an <UNK> bucket.
+    If `vocab` is provided, reuse it; unseen/NaN -> <UNK>.
+    Returns (idx[int64], vocab[list[str]]).
+    """
+
+    if vocab[-1] != "<UNK>":
+        raise ValueError(
+            f"Expected last vocab entry to be '<UNK>', got '{vocab[-1]}' instead. "
+            "Make sure you always append '<UNK>' to vocab when building it from train."
+        )
+
+    if vocab is None:
+        cats = pd.Categorical(series)
+        vocab = [str(c) for c in cats.categories.tolist()] + ["<UNK>"]
+    else:
+        cats = pd.Categorical(series, categories=vocab[:-1])
+
+    codes = cats.codes.astype(np.int64)
+    unk_idx = len(vocab) - 1
+    codes = np.where(codes == -1, unk_idx, codes)
+
+    return codes, vocab
+
+
+def _zscore(t):
+    m = torch.nanmean(t)
+    s = torch.nanstd(t).clamp_min(1e-6)
+    return (t - m) / s
+
 
 class CRISPRoffTDataset(Dataset):
-    def __init__(self, root, transform=None, pre_transform=None):
-        super().__init__(root, transform, pre_transform)
+    """
+    Wraps guide/target embeddings + selected metadata into a PyTorch Dataset.
 
-    @property
-    def raw_file_names(self):
-        # Expect these raw files to exist under `root/raw/`
-        return ['raw_graphs.pt']
+    Expects metadata columns:
+      guide_sequence, chr, start, end, strand, cas9_type, source, score
 
-    @property
-    def processed_file_names(self):
-        # Create one file per graph in `root/processed/`
-        return [f'data_{i}.pt' for i in range(3)]  # 3 toy graphs
+    __getitem__ returns:
+      (x_seq[1536], x_num[2], chr_i, strand_i, cas9_i, source_i, y)
 
-    def process(self):
-        # Example: make 3 toy graphs
-        for i in range(3):
-            # x = torch.randn((4, 2))  # 4 nodes, 2 features
-            x = [
-                'CGGCGCTGGTGCCCAGGACGAGGATGGAGATT', 
-                'CGGCGCTGGTGCCCAGGACGAGGATGGAGATT', 
-                'GGCGCTGTGTGTCCTGGACGAGGAACTGGACT', 
-                'AGGAACTGGAGCAAAGGACAAGGAGATGGTTT'
-            ]
-            num_nodes = len(x)
-            edge_index = torch.tensor([[0, 1, 0, 2],
-                                       [1, 0, 2, 0]], dtype=torch.long)
-            edge_label_index = torch.tensor([[0, 1, 0, 2, 0, 3],
-                                           [1, 0, 2, 0, 3, 0]], dtype=torch.long)
-            y = torch.tensor([1, 1, 1, 1, 0, 0])  # binary label
-            data = Data(x=x, edge_index=edge_index, edge_label_index=edge_label_index, y=y, num_nodes=num_nodes)
-            # Apply pre_transform if given
-            if self.pre_transform:
-                data = self.pre_transform(data)
+    Attributes after init:
+      .vocab  : dict[str]->list[str] for {'chr','strand','cas9_type','source'} (with '<UNK>')
+      .groups : pd.Series[str] (guide_sequence) for grouped splits
+      .N      : number of rows
+    """
 
-            torch.save(data, os.path.join(self.processed_dir, f'data_{i}.pt'))
+    CAT_KEYS = ["chr", "strand", "cas9_type", "source"]
 
-    def len(self):
-        return len(self.processed_file_names)
+    def __init__(
+        self,
+        cfg: RunConfig,
+        idxs: list[int] | None = None,
+        vocabs: dict = {}
+    ):
+        super().__init__()
 
-    def get(self, idx):
-        # Load a single graph by index
-        data_path = os.path.join(self.processed_dir, f'data_{idx}.pt')
-        data = torch.load(data_path, weights_only=False)
-        return data
+        guide_path = cfg.data.guide_seq_path
+        target_path = cfg.data.target_seq_path
+        metadata_path = cfg.data.metadata_path
 
+        # Load data
+        xg = np.load(guide_path).astype(np.float32)  # [N, 768]
+        xt = np.load(target_path).astype(np.float32)  # [N, 768]
+        metadata = pd.read_csv(metadata_path)
 
-if __name__ == "__main__":
-    # Example inputs
-    dataset = CRISPRoffTDataset(root='../data')
+        # Data split groups (by: Guide Sequence)
+        self.groups = xg[idxs]
 
-    print("Number of graphs:", len(dataset))
-    print("First graph:", dataset[0])
-    print("Node features:", dataset[0].x)
-    print("Edge index:", dataset[0].edge_index.shape)
-    print("Edge pairs (positive and negative):", dataset[0].edge_pairs.shape)
-    print("Label:", dataset[0].y)
+        # Load indices for filtering
+        N = xg.shape[0]
+        if idxs is not None:
+            idxs = np.arange(N)
+        else:
+            idxs = np.array(idxs)
+
+        self.idxs = idxs
+        self.N = len(idxs)
+
+        # Guide, Target Sequence
+        self.X_seq = np.concatenate([xg, xt], axis=1).astype(np.float32)  # [N, 1536]
+        self.X_seq = self.X_seq[idxs]
+
+        # Targets
+        self.y = metadata["score"].astype(np.float32).to_numpy()
+        self.y = self.y[idxs]
+
+        # Numerical: start, end
+        start_bp = _zscore(metadata["start"].astype(np.float32).to_numpy())
+        end_bp = _zscore(metadata["end"].astype(np.float32).to_numpy())
+        self.X_num = np.stack([start_bp, end_bp], axis=1).astype(np.float32)  # [N, 2]
+
+        # Categoricals: chr, strand, cas9_type, source
+        self.X_cat = {}
+        self.vocabs = {}
+
+        for key in self.CAT_KEYS:
+            code, vocab = _cat_to_index(metadata[key][idxs], vocab=vocabs.get(key))
+            self.X_cat[key] = code
+            self.vocabs[key] = vocab
+
+        self.N = self.X_seq.shape[0]
+
+    def __len__(self) -> int:
+        return self.N
+
+    def __getitem__(self, i: int):
+        idx = self.idxs[i]
+        x_seq = torch.from_numpy(self.X_seq[idx]).to(torch.float32)  # [1536]
+        x_num = torch.from_numpy(self.X_num[idx]).to(torch.float32)  # [2]
+        x_chr = torch.tensor(self.X_cat["chr"][idx], dtype=torch.long)
+        x_strand = torch.tensor(self.X_cat["strand"][idx], dtype=torch.long)
+        x_cas9 = torch.tensor(self.X_cat["cas9_type"][idx], dtype=torch.long)
+        x_source = torch.tensor(self.X_cat["source"][idx], dtype=torch.long)
+        y = torch.tensor(self.y[i], dtype=torch.float32)
+
+        return (x_seq, x_num, x_chr, x_strand, x_cas9, x_source, y)
