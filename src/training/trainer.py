@@ -89,7 +89,7 @@ class Trainer:
         total_loss, total_mae = 0.0, 0.0
         n = 0
 
-        y_preds = []
+        y_probs = []
         y_trues = []
 
         for batch in loader:
@@ -108,6 +108,7 @@ class Trainer:
 
             preds = self.model(x_seq, x_num, x_chr, x_strand, x_cas9, x_source)
             loss = self.criterion(preds, y)
+            probs = torch.sigmoid(preds.detach())
 
             if train:
                 loss.backward()
@@ -115,18 +116,18 @@ class Trainer:
                 self.state.global_step += 1
 
             total_loss += loss.detach().item() * y.size(0)
-            total_mae += (preds.detach() - y).abs().sum().item()
+            total_mae += (probs.detach() - y).abs().sum().item()
             n += y.size(0)
 
-            y_preds.append(preds.detach().cpu())
+            y_probs.append(probs.cpu())
             y_trues.append(y.detach().cpu())
 
         avg_loss = total_loss / n
         mae = total_mae / n
 
-        y_preds = torch.cat(y_preds).numpy()
+        y_probs = torch.cat(y_probs).numpy()
         y_trues = torch.cat(y_trues).numpy()
-        pcc = pearsonr(y_preds, y_trues)[0]
+        pcc = pearsonr(y_probs, y_trues)[0]
 
         return avg_loss, mae, pcc
 
@@ -161,7 +162,7 @@ class Trainer:
         """Return (row_id, y_pred, y_true)."""
 
         self.model.eval()
-        row_ids, y_preds, y_trues = [], [], []
+        row_ids, y_probs, y_trues = [], [], []
 
         for batch in loader:
             row_id, x_seq, x_num, x_chr, x_strand, x_cas9, x_source, y = batch
@@ -175,23 +176,24 @@ class Trainer:
             y = y.to(self.device)
 
             pred = self.model(x_seq, x_num, x_chr, x_strand, x_cas9, x_source)
+            prob = torch.sigmoid(pred.detach())
 
             row_ids.extend(row_id)
-            y_preds.append(pred.cpu())
+            y_probs.append(prob.cpu())
             y_trues.append(y.cpu())
 
         row_ids = np.array(row_ids, dtype=np.int64)
-        y_preds = torch.cat(y_preds).numpy()
+        y_probs = torch.cat(y_probs).numpy()
         y_trues = torch.cat(y_trues).numpy()
-        return row_ids, y_preds, y_trues
+        return row_ids, y_probs, y_trues
 
     @torch.no_grad()
     def metric(self, loader) -> dict[str, float]:
-        _, y_pred, y_true = self.predict(loader)
+        _, y_prob, y_true = self.predict(loader)
 
-        mse = float(np.mean((y_pred - y_true) ** 2))
-        mae = float(np.mean(np.abs(y_pred - y_true)))
-        pcc = float(pearsonr(y_true, y_pred)[0])
+        mse = float(np.mean((y_prob - y_true) ** 2))
+        mae = float(np.mean(np.abs(y_prob - y_true)))
+        pcc = float(pearsonr(y_true, y_prob)[0])
 
         metrics = {"loss": mse, "mae": mae, "pcc": pcc}
         return metrics
@@ -199,5 +201,5 @@ class Trainer:
     @torch.no_grad()
     def save_predictions(self, loader: DataLoader, out_path: Path) -> None:
         """Save predictions and true labels to a compressed .npz file."""
-        row_ids, y_pred, y_true = self.predict(loader)
-        np.savez_compressed(out_path, row_ids=row_ids, y_pred=y_pred, y_true=y_true)
+        row_ids, y_prob, y_true = self.predict(loader)
+        np.savez_compressed(out_path, row_ids=row_ids, y_prob=y_prob, y_true=y_true)
