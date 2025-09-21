@@ -76,10 +76,13 @@ def predict_off_targets(guide: str):
     with GUIDE_FILE.open('w') as f:
         f.write(f"{REFERENCE_GENOME}\n")
         f.write(f"{PAM}\n")
-        f.write(f"{guide} {MAX_MISMATCH}\N")
+        f.write(f"{guide} {MAX_MISMATCH}\n")
 
     ## Call the Cas-OFFinder executable
-    subprocess.run([CAS_OFFINDER_PATH, str(GUIDE_FILE), str(OFF_TARGETS_FILE)])
+    subprocess.run(
+        [CAS_OFFINDER_PATH, str(GUIDE_FILE), str(OFF_TARGETS_FILE)], 
+        check = True
+    )
 
     ## Read the off-target outputs as a dataframe
     off_targets = pd.read_csv(
