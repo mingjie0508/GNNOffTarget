@@ -11,3 +11,7 @@
 *.pyc
 build/
 **/*.egg-info
+
+# Outputs
+**/output
+**/outputs

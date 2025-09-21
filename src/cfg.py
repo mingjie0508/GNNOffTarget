@@ -11,18 +11,25 @@ class OptimConfig:
 
 
 @dataclass
+class EarlyStopperConfig:
+    patience: int = 10
+    min_delta: float = 0.0
+
+
+@dataclass
 class TrainConfig:
-    epochs: int = 10
-    batch_size: int = 128
-    device: str = "cuda"
+    epochs: int = 100
+    batch_size: int = 256
+    device: str = "mps"
     optim: OptimConfig = field(default_factory=OptimConfig)
+    early_stop: EarlyStopperConfig = field(default_factory=EarlyStopperConfig)
 
 
 @dataclass
 class ModelConfig:
     seq_in_dim: int = 1536
     num_in_dim: int = 2
-    cat_in_dims: dict = {"chr": 8, "strand": 2, "cas9_type": 8, "source": 8}
+    cat_in_dims: dict = field(default_factory=lambda: {"chr": 8, "strand": 2, "cas9_type": 8, "source": 8})
     metadata_out_dim: int = 32
     hidden_dim: int = 256
     dropout: float = 0.2

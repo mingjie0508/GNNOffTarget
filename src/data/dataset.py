@@ -1,12 +1,9 @@
-import json
 import numpy as np
 import pandas as pd
 import torch
-
 from torch.utils.data import Dataset
-from .cfg import RunConfig
 
-from sklearn.preprocessing import StandardScaler
+from ..cfg import DataConfig
 
 
 def _cat_to_index(series: pd.Series, vocab: list = None):
@@ -16,16 +13,16 @@ def _cat_to_index(series: pd.Series, vocab: list = None):
     Returns (idx[int64], vocab[list[str]]).
     """
 
-    if vocab[-1] != "<UNK>":
-        raise ValueError(
-            f"Expected last vocab entry to be '<UNK>', got '{vocab[-1]}' instead. "
-            "Make sure you always append '<UNK>' to vocab when building it from train."
-        )
-
     if vocab is None:
         cats = pd.Categorical(series)
         vocab = [str(c) for c in cats.categories.tolist()] + ["<UNK>"]
     else:
+        if vocab[-1] != "<UNK>":
+            raise ValueError(
+                f"Expected last vocab entry to be '<UNK>', got '{vocab[-1]}' instead. "
+                "Make sure you always append '<UNK>' to vocab when building it from train."
+            )
+
         cats = pd.Categorical(series, categories=vocab[:-1])
 
     codes = cats.codes.astype(np.int64)
@@ -53,30 +50,30 @@ class CRISPRoffTDataset(Dataset):
 
     CAT_KEYS = ["chr", "strand", "cas9_type", "source"]
 
-    def __init__(self, cfg: RunConfig, idxs: list[int] | None = None, vocabs: dict = {}):
+    def __init__(self, cfg: DataConfig, idxs: list[int] | None = None, vocabs: dict = {}):
         super().__init__()
 
-        guide_path = cfg.data.guide_seq_path
-        target_path = cfg.data.target_seq_path
-        metadata_path = cfg.data.metadata_path
+        guide_path = cfg.guide_seq_path
+        target_path = cfg.target_seq_path
+        metadata_path = cfg.metadata_path
 
         # Load data
         xg = np.load(guide_path).astype(np.float32)  # [N, 768]
         xt = np.load(target_path).astype(np.float32)  # [N, 768]
         metadata = pd.read_csv(metadata_path)
 
-        # Data split groups (by: Guide Sequence)
-        self.groups = xg[idxs]
-
         # Load indices for filtering
         N = xg.shape[0]
-        if idxs is not None:
+        if idxs is None:
             idxs = np.arange(N)
         else:
             idxs = np.array(idxs)
 
         self.idxs = idxs
         self.N = len(idxs)
+
+        # Data split groups (by: guide_sequence)
+        self.groups = metadata["guide_sequence"][idxs]
 
         # Guide, Target Sequence
         self.X_seq = np.concatenate([xg, xt], axis=1).astype(np.float32)  # [N, 1536]
@@ -106,13 +103,13 @@ class CRISPRoffTDataset(Dataset):
         return self.N
 
     def __getitem__(self, i: int):
-        idx = self.idxs[i]
-        x_seq = torch.from_numpy(self.X_seq[idx]).to(torch.float32)  # [1536]
-        x_num = torch.from_numpy(self.X_num[idx]).to(torch.float32)  # [2]
-        x_chr = torch.tensor(self.X_cat["chr"][idx], dtype=torch.long)
-        x_strand = torch.tensor(self.X_cat["strand"][idx], dtype=torch.long)
-        x_cas9 = torch.tensor(self.X_cat["cas9_type"][idx], dtype=torch.long)
-        x_source = torch.tensor(self.X_cat["source"][idx], dtype=torch.long)
+        row_id = self.idxs[i]
+        x_seq = torch.from_numpy(self.X_seq[i]).to(torch.float32)  # [1536]
+        x_num = torch.from_numpy(self.X_num[i]).to(torch.float32)  # [2]
+        x_chr = torch.tensor(self.X_cat["chr"][i], dtype=torch.long)
+        x_strand = torch.tensor(self.X_cat["strand"][i], dtype=torch.long)
+        x_cas9 = torch.tensor(self.X_cat["cas9_type"][i], dtype=torch.long)
+        x_source = torch.tensor(self.X_cat["source"][i], dtype=torch.long)
         y = torch.tensor(self.y[i], dtype=torch.float32)
 
-        return (x_seq, x_num, x_chr, x_strand, x_cas9, x_source, y)
+        return row_id, x_seq, x_num, x_chr, x_strand, x_cas9, x_source, y

@@ -1,21 +1,17 @@
-#!/usr/bin/env python
+import argparse
+import json
+import os
 from pathlib import Path
-import torch
-from torch.utils.data import DataLoader, TensorDataset
+
+from torch.utils.data import DataLoader
 
 from src.cfg import RunConfig
-from src.builders import create_model, create_optimizer
-from src.trainer import Trainer
-from src.utils.misc_utils import seed_everything
-from torch_geometric.data import Data
-
-import argparse
-import numpy as np
-import pandas as pd
-import json
-
-from src.dataset import CRISPRoffTDataset
-from src.utils.data_utils import get_splits, fit_num_scaler, get_collate_fn
+from src.builders import create_model
+from src.training.trainer import Trainer
+from src.utils.seed import seed_everything
+from src.data.dataset import CRISPRoffTDataset
+from src.data.split import get_splits
+from src.data.transform import get_collate_fn, fit_num_scaler
 
 
 def main(args):
@@ -23,17 +19,18 @@ def main(args):
     # Configs
     cfg = RunConfig()
     cfg.data.guide_seq_path = Path(args.guide_seq_path)
-    cfg.data.target_seq_path = Path(args.target_seg_path)
+    cfg.data.target_seq_path = Path(args.target_seq_path)
     cfg.data.metadata_path = Path(args.metadata_path)
     cfg.data.vocab_path = Path(args.vocab_path) if args.vocab_path else None
 
     cfg.train.device = args.device
-    cfg.paths.output_dir = Path(args.output)
+    cfg.output_dir = Path(args.output)
 
     seed_everything(cfg.seed)
+    os.makedirs(cfg.output_dir, exist_ok=True)
 
     # Data
-    full = CRISPRoffTDataset(cfg, idxs=None)
+    full = CRISPRoffTDataset(cfg.data, idxs=None)
     train_idx, val_idx, test_idx = get_splits(len(full.groups), full.groups, seed=cfg.seed)
 
     vocabs = {}
@@ -41,25 +38,37 @@ def main(args):
         with open(cfg.data.vocab_path, "r") as f:
             vocabs = json.load(f)
 
-    train_ds = CRISPRoffTDataset(cfg, train_idx, vocabs=vocabs)
-    val_ds = CRISPRoffTDataset(cfg, val_idx, vocabs=train_ds.vocabs)
-    test_ds = CRISPRoffTDataset(cfg, test_idx, vocabs=train_ds.vocabs)
+    train_ds = CRISPRoffTDataset(cfg.data, train_idx, vocabs=vocabs)
+    val_ds = CRISPRoffTDataset(cfg.data, val_idx, vocabs=train_ds.vocabs)
+    test_ds = CRISPRoffTDataset(cfg.data, test_idx, vocabs=train_ds.vocabs)
 
     num_scaler = fit_num_scaler(train_ds.X_num)
     collate_fn = get_collate_fn(num_scaler)
 
     train_loader = DataLoader(train_ds, batch_size=cfg.train.batch_size, shuffle=True, collate_fn=collate_fn)
-    val_loader = DataLoader(val_ds, batch_size=cfg.train.batch_size, shuffle=True, collate_fn=collate_fn)
-    test_loader = DataLoader(test_ds, batch_size=cfg.train.batch_size, shuffle=True, collate_fn=collate_fn)
+    train_eval_loader = DataLoader(train_ds, batch_size=cfg.train.batch_size, shuffle=False, collate_fn=collate_fn)
+    val_loader = DataLoader(val_ds, batch_size=cfg.train.batch_size, shuffle=False, collate_fn=collate_fn)
+    test_loader = DataLoader(test_ds, batch_size=cfg.train.batch_size, shuffle=False, collate_fn=collate_fn)
 
-    # Model + Loss
+    # Model
     model = create_model(cfg, train_ds.vocabs)
-    optim = create_optimizer(model, cfg)
-    criterion = torch.nn.MSELoss()
 
     # Train
-    trainer = Trainer(cfg, model, train_loader, val_loader, criterion=criterion)
+    trainer = Trainer(cfg, model, train_loader, val_loader)
     trainer.train()
+
+    train_metrics = trainer.metric(train_eval_loader)
+    print("\nTrain metrics:", " | ".join(f"{k}={v:.4f}" for k, v in train_metrics.items()))
+    
+    val_metrics = trainer.metric(val_loader)
+    print("Val metrics:", " | ".join(f"{k}={v:.4f}" for k, v in val_metrics.items()))
+
+    test_metrics = trainer.metric(test_loader)
+    print("Test metrics:", " | ".join(f"{k}={v:.4f}" for k, v in test_metrics.items()))
+
+    trainer.save_predictions(train_loader, cfg.output_dir / "predictions_train.npz")
+    trainer.save_predictions(val_loader, cfg.output_dir / "predictions_val.npz")
+    trainer.save_predictions(test_loader, cfg.output_dir / "predictions_test.npz")
 
 
 if __name__ == "__main__":

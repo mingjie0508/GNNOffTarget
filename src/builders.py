@@ -1,11 +1,11 @@
-from __future__ import annotations
-from typing import Optional, Tuple, Any
 import torch
 from torch import nn
-from torch.optim import Optimizer, AdamW
-from torch.utils.data import DataLoader
-from .cfg import RunConfig, OptimConfig
+from torch.optim import AdamW, Optimizer
+
 from models.fcnn import FCNNRegressor
+
+from .cfg import EarlyStopperConfig, OptimConfig, RunConfig
+from .training.earlystop import EarlyStopper
 
 
 def create_model(cfg: RunConfig, vocabs: dict) -> nn.Module:
@@ -28,3 +28,10 @@ def create_optimizer(model: nn.Module, cfg: OptimConfig) -> Optimizer:
         eps=cfg.eps,
         weight_decay=cfg.weight_decay,
     )
+    
+def create_loss_fn():
+    return torch.nn.MSELoss()
+
+def create_early_stopper(cfg: EarlyStopperConfig):
+    return EarlyStopper(cfg.patience, cfg.min_delta)
+    
