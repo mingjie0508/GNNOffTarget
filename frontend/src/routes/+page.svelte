@@ -25,8 +25,15 @@
     let previousBestSequence = "";
     let flashingIndices = new Set<number>();
 
+    // --- Sequence logo data ---
+    let logoData: Record<
+        string,
+        { A: number; C: number; G: number; T: number }
+    > = {};
+
     // --- ECharts instances ---
     let chartFitness: echarts.ECharts | null = null;
+    let chartLogo: echarts.ECharts | null = null;
 
     function validateTargetSequence(seq: string): string {
         if (!seq) return "Target sequence is required";
@@ -44,9 +51,13 @@
         currentBestSequence = "";
         previousBestSequence = "";
         flashingIndices.clear();
+        logoData = {};
         chartFitness?.setOption({
             xAxis: { data: [] },
             series: [{ data: [] }, { data: [] }],
+        });
+        chartLogo?.setOption({
+            series: [{ data: [] }, { data: [] }, { data: [] }, { data: [] }],
         });
     }
 
@@ -62,6 +73,64 @@
             series: [
                 { name: "Best", type: "line", data: [] },
                 { name: "Mean", type: "line", data: [] },
+            ],
+        });
+
+        const el2 = document.getElementById("logo")!;
+        chartLogo = echarts.init(el2);
+        chartLogo.setOption({
+            title: { text: "Sequence Logo - Base Distribution" },
+            tooltip: {
+                trigger: "axis",
+                axisPointer: { type: "shadow" },
+                formatter: function (params: any) {
+                    let result = `Position ${params[0].axisValue}:<br/>`;
+                    params.forEach((param: any) => {
+                        result += `${param.seriesName}: ${param.value}<br/>`;
+                    });
+                    return result;
+                },
+            },
+            legend: { data: ["A", "C", "G", "T"] },
+            xAxis: {
+                type: "category",
+                data: Array.from({ length: 20 }, (_, i) => (i + 1).toString()),
+                name: "Position",
+            },
+            yAxis: {
+                type: "value",
+                name: "Count",
+                min: 0,
+            },
+            series: [
+                {
+                    name: "A",
+                    type: "bar",
+                    stack: "nucleotides",
+                    data: [],
+                    itemStyle: { color: "#fbbf24" }, // amber
+                },
+                {
+                    name: "C",
+                    type: "bar",
+                    stack: "nucleotides",
+                    data: [],
+                    itemStyle: { color: "#ef4444" }, // red
+                },
+                {
+                    name: "G",
+                    type: "bar",
+                    stack: "nucleotides",
+                    data: [],
+                    itemStyle: { color: "#10b981" }, // emerald
+                },
+                {
+                    name: "T",
+                    type: "bar",
+                    stack: "nucleotides",
+                    data: [],
+                    itemStyle: { color: "#8b5cf6" }, // violet
+                },
             ],
         });
     }
@@ -97,6 +166,12 @@
         bestFitData.push(f.summary.best_fit);
         meanFitData.push(f.summary.mean_fit);
 
+        // Update logo data if available
+        if (f.logo_counts) {
+            logoData = f.logo_counts;
+            updateLogoChart();
+        }
+
         // Update best sequence visualization - get from top array if available, otherwise from best_sequence
         let bestSeq = f.best_sequence;
         if (!bestSeq && f.top && f.top.length > 0) {
@@ -128,6 +203,40 @@
             es?.close();
             es = null;
         }
+    }
+
+    function updateLogoChart() {
+        if (!chartLogo || !logoData) return;
+
+        const positions = Array.from({ length: 20 }, (_, i) => i.toString());
+        const aData: number[] = [];
+        const cData: number[] = [];
+        const gData: number[] = [];
+        const tData: number[] = [];
+
+        for (let i = 0; i < 20; i++) {
+            const posData = logoData[i.toString()];
+            if (posData) {
+                aData.push(posData.A || 0);
+                cData.push(posData.C || 0);
+                gData.push(posData.G || 0);
+                tData.push(posData.T || 0);
+            } else {
+                aData.push(0);
+                cData.push(0);
+                gData.push(0);
+                tData.push(0);
+            }
+        }
+
+        chartLogo.setOption({
+            series: [
+                { name: "A", data: aData },
+                { name: "C", data: cData },
+                { name: "G", data: gData },
+                { name: "T", data: tData },
+            ],
+        });
     }
 
     function startRun() {
@@ -170,6 +279,7 @@
         // Handle window resize to ensure charts remain properly sized
         const handleResize = () => {
             chartFitness?.resize();
+            chartLogo?.resize();
         };
 
         window.addEventListener("resize", handleResize);
@@ -369,6 +479,9 @@
     <!-- Charts -->
     <div class="bg-white rounded-xl shadow p-4">
         <div id="fitness" class="w-full h-64"></div>
+    </div>
+    <div class="bg-white rounded-xl shadow p-4">
+        <div id="logo" class="w-full h-80"></div>
     </div>
 </div>
 
