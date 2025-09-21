@@ -39,6 +39,9 @@ def main(args):
             vocabs = json.load(f)
 
     train_ds = CRISPRoffTDataset(cfg.data, train_idx, vocabs=vocabs)
+    with open(cfg.output_dir / "vocabs.json", "w") as f:
+        json.dump(train_ds.vocabs, f, indent=4)
+    
     val_ds = CRISPRoffTDataset(cfg.data, val_idx, vocabs=train_ds.vocabs)
     test_ds = CRISPRoffTDataset(cfg.data, test_idx, vocabs=train_ds.vocabs)
 

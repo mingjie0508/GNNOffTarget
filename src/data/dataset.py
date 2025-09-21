@@ -80,7 +80,7 @@ class CRISPRoffTDataset(Dataset):
         self.X_seq = self.X_seq[idxs]
 
         # Targets
-        self.y = metadata["score"].astype(np.float32).to_numpy()
+        self.y = metadata["cfd_score"].astype(np.float32).to_numpy()
         self.y = self.y[idxs]
 
         # Numerical: start, end

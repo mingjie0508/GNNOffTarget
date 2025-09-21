@@ -30,7 +30,7 @@ def create_optimizer(model: nn.Module, cfg: OptimConfig) -> Optimizer:
     )
     
 def create_loss_fn():
-    return torch.nn.MSELoss()
+    return torch.nn.BCEWithLogitsLoss()
 
 def create_early_stopper(cfg: EarlyStopperConfig):
     return EarlyStopper(cfg.patience, cfg.min_delta)
