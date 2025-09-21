@@ -305,7 +305,7 @@ def genetic_algorithm() -> Tuple[str, Dict]:
             for _ in range(POPULATION_SIZE - len(population))
         )
 
-    best_global = None  # (fit, seq, on, off, pen)
+    best_global = None  # (fit, seq, on, off, pen, off_targets)
     logs = {
         "best_fit": [],
         "mean_fit": [],
@@ -317,19 +317,58 @@ def genetic_algorithm() -> Tuple[str, Dict]:
 
     for gen in range(GENERATIONS):
         print(f"Generation {gen+1}/{GENERATIONS}")
+
+        # Compute all off-targets once per generation
+        with GUIDE_FILE.open("w") as f:
+            f.write(f"{REFERENCE_GENOME}\n")
+            f.write(f"{PAM}\n")
+            for g in population:
+                f.write(f"{g} {MAX_MISMATCH}\n")
+
+        ## Call the Cas-OFFinder executable
+        subprocess.run(
+            [CAS_OFFINDER_PATH, str(GUIDE_FILE), str(OFF_TARGETS_FILE)],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+        ## Read the off-target outputs as a dataframe
+        all_off_targets = pd.read_csv(
+            OFF_TARGETS_FILE,
+            sep="\t",
+            header=None,
+            names=[
+                "guide",
+                "chrom",
+                "position",
+                "strand",
+                "target_seq",
+                "mismatches",
+            ],
+        )
+        all_off_targets["position"] = all_off_targets["position"].astype(int)
+        all_off_targets["mismatches"] = all_off_targets["mismatches"].astype(
+            int
+        )
+
+        all_off_targets = all_off_targets[["guide", "target_seq"]]
+
         # Evaluate population
         scores: Dict[str, float] = {}
         comps: Dict[str, Tuple[float, float, float, float]] = {}
         for g in population:
-            off_targets = predict_off_targets(g)
+            off_targets = all_off_targets.loc[
+                all_off_targets["guide"] == g, "target_seq"
+            ].tolist()
             fit, on, off, pen = fitness_components(g, off_targets)
             scores[g] = fit
-            comps[g] = (fit, on, off, pen)
+            comps[g] = (fit, on, off, pen, off_targets)
 
         # Logging
         sorted_pop = sorted(population, key=lambda z: scores[z], reverse=True)
         best = sorted_pop[0]
-        best_fit, best_on, best_off, best_pen = comps[best]
+        best_fit, best_on, best_off, best_pen, best_off_targets = comps[best]
         mean_fit = sum(scores[g] for g in population) / len(population)
         logs["best_fit"].append(best_fit)
         logs["mean_fit"].append(mean_fit)
@@ -339,7 +378,14 @@ def genetic_algorithm() -> Tuple[str, Dict]:
         logs["diversity"].append(mean_hamming(population))
 
         if (best_global is None) or (best_fit > best_global[0]):
-            best_global = (best_fit, best, best_on, best_off, best_pen)
+            best_global = (
+                best_fit,
+                best,
+                best_on,
+                best_off,
+                best_pen,
+                best_off_targets,
+            )
 
         # Next generation
         new_pop: List[str] = []
@@ -384,7 +430,7 @@ def genetic_algorithm() -> Tuple[str, Dict]:
 
     # Final thorough evaluation on full off-targets for the best
     fit_final, on_final, off_final, pen_final = fitness_components(
-        best_global[1], best_global[3]
+        best_global[1], best_global[5]
     )
     best_global = (fit_final, best_global[1], on_final, off_final, pen_final)
     return best_global[1], {"summary": best_global, "logs": logs}
@@ -444,7 +490,7 @@ def run_ga_stream(params: Dict[str, Any] = None) -> Iterable[Dict[str, Any]]:
             for _ in range(POPULATION_SIZE - len(population))
         )
 
-    best_global = None  # (fit, seq, on, off, pen)
+    best_global = None  # (fit, seq, on, off, pen, off_targets)
     logs = {
         "best_fit": [],
         "mean_fit": [],
@@ -458,15 +504,54 @@ def run_ga_stream(params: Dict[str, Any] = None) -> Iterable[Dict[str, Any]]:
         # evaluate
         scores = {}
         comps = {}
+
+        # Compute all off-targets once per generation
+        with GUIDE_FILE.open("w") as f:
+            f.write(f"{REFERENCE_GENOME}\n")
+            f.write(f"{PAM}\n")
+            for g in population:
+                f.write(f"{g} {MAX_MISMATCH}\n")
+
+        ## Call the Cas-OFFinder executable
+        subprocess.run(
+            [CAS_OFFINDER_PATH, str(GUIDE_FILE), str(OFF_TARGETS_FILE)],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+        ## Read the off-target outputs as a dataframe
+        all_off_targets = pd.read_csv(
+            OFF_TARGETS_FILE,
+            sep="\t",
+            header=None,
+            names=[
+                "guide",
+                "chrom",
+                "position",
+                "strand",
+                "target_seq",
+                "mismatches",
+            ],
+        )
+        all_off_targets["position"] = all_off_targets["position"].astype(int)
+        all_off_targets["mismatches"] = all_off_targets["mismatches"].astype(
+            int
+        )
+
+        all_off_targets = all_off_targets[["guide", "target_seq"]]
+
         for g in population:
-            off_targets = predict_off_targets(g)
+            off_targets = all_off_targets.loc[
+                all_off_targets["guide"] == g, "target_seq"
+            ].tolist()
             fit, on, off, pen = fitness_components(g, off_targets)
             scores[g] = fit
-            comps[g] = (fit, on, off, pen)
+            comps[g] = (fit, on, off, pen, off_targets)
 
         sorted_pop = sorted(population, key=lambda z: scores[z], reverse=True)
         best = sorted_pop[0]
-        best_fit, best_on, best_off, best_pen = comps[best]
+        best_fit, best_on, best_off, best_pen, best_off_targets = comps[best]
         mean_fit = sum(scores[g] for g in population) / len(population)
 
         logs["best_fit"].append(best_fit)
@@ -477,7 +562,14 @@ def run_ga_stream(params: Dict[str, Any] = None) -> Iterable[Dict[str, Any]]:
         logs["diversity"].append(mean_hamming(population))
 
         if (best_global is None) or (best_fit > best_global[0]):
-            best_global = (best_fit, best, best_on, best_off, best_pen)
+            best_global = (
+                best_fit,
+                best,
+                best_on,
+                best_off,
+                best_pen,
+                best_off_targets,
+            )
 
         # emit frame for this generation
         yield {
@@ -548,7 +640,7 @@ def run_ga_stream(params: Dict[str, Any] = None) -> Iterable[Dict[str, Any]]:
 
     # final thorough eval on full off-targets for the best
     fit_final, on_final, off_final, pen_final = fitness_components(
-        best_global[1], best_global[3]
+        best_global[1], best_global[5]
     )
 
     # Also get the subset-based fitness for consistency with training
