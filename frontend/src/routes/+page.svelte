@@ -181,6 +181,18 @@
 </script>
 
 <div class="p-6 space-y-6">
+    <!-- Logo -->
+    <div class="text-center mb-8">
+        <h1
+            class="text-4xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent"
+        >
+            CRISPRight
+        </h1>
+        <p class="text-gray-600 text-sm mt-2">
+            Genetic Algorithm for CRISPR Guide RNA Optimization
+        </p>
+    </div>
+
     <!-- Control panel -->
     <div class="bg-white rounded-xl shadow p-6">
         <!-- Target Sequence Input -->

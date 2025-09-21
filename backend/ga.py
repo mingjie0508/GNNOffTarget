@@ -6,7 +6,10 @@ import math
 import subprocess
 from pathlib import Path
 import pandas as pd
-import time
+
+# Mingjie: import
+import torch
+from model import TransformerClassifier
 
 # GA Hyperparameters
 POPULATION_SIZE = 100
@@ -47,29 +50,74 @@ MAX_MISMATCH = 3
 # Path to Cas-OFFinder executable
 CAS_OFFINDER_PATH = PARENT_DIR / "src/cas-offinder"
 
+# Mingjie: model
+SQN_EMBED_MODEL = "zhihan1996/DNABERT-S"
+SQN_EMBED_LOAD_LOCAL = (
+    False  # TODO: change this to False to download model from huggingface
+)
+SQN_EMBED_DIM = 768
+FEED_FORWARD_DIM = 64
+CHECKPOINT_PATH = "checkpoints/dnabert_cfd.pth"
+PRED_PATH = "data/test_new_predict.csv"
+
+# Mingjie: model configuration
+DEVICE = torch.device("cpu")
+SEED = 1
+BATCH_SIZE = 256
+DROPOUT = 0.0
+EPOCHS = 1
+LR = 1e-4
+WEIGHT_DECAY = 0.0
+
+# Mingjie: model
+classifier = TransformerClassifier(
+    embed_model=SQN_EMBED_MODEL,
+    embedding_dim=SQN_EMBED_DIM,
+    dim_feedforward=FEED_FORWARD_DIM,
+    dropout=DROPOUT,
+    local_files_only=SQN_EMBED_LOAD_LOCAL,
+)
+classifier = classifier.to(DEVICE)
+
+# checkpoint path
+checkpoint = torch.load(
+    CHECKPOINT_PATH, weights_only=False, map_location=torch.device("cpu")
+)
+classifier.load_state_dict(checkpoint["model"], strict=False)
+classifier.eval()
+
 
 # Surrogate model hooks
 def predict_prob_on_target(guide: str, target: str) -> float:
     """Return model-predicted probability guide cuts intended target.
     TODO: Replace with your trained regression model inference.
     """
-    matches = sum(1 for a, b in zip(guide[-8:], target[-8:]) if a == b)
-    return min(1.0, 0.1 + 0.1 * matches)
+    x = [guide + "[SEP]" + target]
+
+    with torch.no_grad():
+        pred = classifier(x)
+        score = pred.item()
+        print("Predicted off-target score (higher more significant):", score)
+    # matches = sum(1 for a, b in zip(guide[-8:], target[-8:]) if a == b)
+    return score
 
 
 def predict_prob_off_target(guide: str, target: str) -> float:
     """Return model-predicted probability guide cuts an off-target.
     TODO: Replace with your trained regression model inference.
     """
+    x = [guide + "[SEP]" + target]
 
-    # Use Hayden's model
-
-    mismatches = sum(1 for a, b in zip(guide, target) if a != b)
-    return max(0.0, 0.4 - 0.03 * (SEQUENCE_LENGTH - mismatches))
+    with torch.no_grad():
+        pred = classifier(x)
+        score = pred.item()
+        print("Predicted off-target score (higher more significant):", score)
+    # mismatches = sum(1 for a, b in zip(guide, target) if a != b)
+    return score
 
 
 def predict_off_targets(guide: str):
-    # Returns a dataframe of potential off targets
+    # Returns a list of potential off targets
 
     ## Write the guide RNA to a text file
     with GUIDE_FILE.open("w") as f:
@@ -77,7 +125,7 @@ def predict_off_targets(guide: str):
         f.write(f"{PAM}\n")
         f.write(f"{guide} {MAX_MISMATCH}\n")
 
-    ## Call the Cas-OFFinder executable
+    ## Call the Cas-FFinder executable
     subprocess.run(
         [CAS_OFFINDER_PATH, str(GUIDE_FILE), str(OFF_TARGETS_FILE)],
         check=True,
@@ -95,7 +143,8 @@ def predict_off_targets(guide: str):
     off_targets["position"] = off_targets["position"].astype(int)
     off_targets["mismatches"] = off_targets["mismatches"].astype(int)
 
-    return off_targets
+    ## Return a list of off-target sequences
+    return list(set(off_targets["target_seq"].tolist()))
 
 
 # Example off targets
@@ -220,6 +269,10 @@ def fitness_components(
     # repair (light) before scoring to avoid wasting evals
     seq = repair(seq)
     on = cached_predict_on(seq, INTENDED_TARGET)
+
+    ## Predict off-targets based on the guide sequence
+    off_targets = predict_off_targets(seq)
+
     off_scores = [cached_predict_off(seq, t) for t in off_targets_subset]
     off = off_agg(off_scores, OFFTARGET_TOPK)
     pen = penalties(seq)
@@ -305,7 +358,7 @@ def genetic_algorithm() -> Tuple[str, Dict]:
             for _ in range(POPULATION_SIZE - len(population))
         )
 
-    best_global = None  # (fit, seq, on, off, pen, off_targets)
+    best_global = None  # (fit, seq, on, off, pen)
     logs = {
         "best_fit": [],
         "mean_fit": [],
@@ -316,59 +369,20 @@ def genetic_algorithm() -> Tuple[str, Dict]:
     }
 
     for gen in range(GENERATIONS):
-        print(f"Generation {gen+1}/{GENERATIONS}")
-
-        # Compute all off-targets once per generation
-        with GUIDE_FILE.open("w") as f:
-            f.write(f"{REFERENCE_GENOME}\n")
-            f.write(f"{PAM}\n")
-            for g in population:
-                f.write(f"{g} {MAX_MISMATCH}\n")
-
-        ## Call the Cas-OFFinder executable
-        subprocess.run(
-            [CAS_OFFINDER_PATH, str(GUIDE_FILE), str(OFF_TARGETS_FILE)],
-            check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-
-        ## Read the off-target outputs as a dataframe
-        all_off_targets = pd.read_csv(
-            OFF_TARGETS_FILE,
-            sep="\t",
-            header=None,
-            names=[
-                "guide",
-                "chrom",
-                "position",
-                "strand",
-                "target_seq",
-                "mismatches",
-            ],
-        )
-        all_off_targets["position"] = all_off_targets["position"].astype(int)
-        all_off_targets["mismatches"] = all_off_targets["mismatches"].astype(
-            int
-        )
-
-        all_off_targets = all_off_targets[["guide", "target_seq"]]
 
         # Evaluate population
         scores: Dict[str, float] = {}
         comps: Dict[str, Tuple[float, float, float, float]] = {}
         for g in population:
-            off_targets = all_off_targets.loc[
-                all_off_targets["guide"] == g, "target_seq"
-            ].tolist()
+            off_targets = predict_off_targets(g)
             fit, on, off, pen = fitness_components(g, off_targets)
             scores[g] = fit
-            comps[g] = (fit, on, off, pen, off_targets)
+            comps[g] = (fit, on, off, pen)
 
         # Logging
         sorted_pop = sorted(population, key=lambda z: scores[z], reverse=True)
         best = sorted_pop[0]
-        best_fit, best_on, best_off, best_pen, best_off_targets = comps[best]
+        best_fit, best_on, best_off, best_pen = comps[best]
         mean_fit = sum(scores[g] for g in population) / len(population)
         logs["best_fit"].append(best_fit)
         logs["mean_fit"].append(mean_fit)
@@ -378,14 +392,7 @@ def genetic_algorithm() -> Tuple[str, Dict]:
         logs["diversity"].append(mean_hamming(population))
 
         if (best_global is None) or (best_fit > best_global[0]):
-            best_global = (
-                best_fit,
-                best,
-                best_on,
-                best_off,
-                best_pen,
-                best_off_targets,
-            )
+            best_global = (best_fit, best, best_on, best_off, best_pen)
 
         # Next generation
         new_pop: List[str] = []
@@ -430,22 +437,10 @@ def genetic_algorithm() -> Tuple[str, Dict]:
 
     # Final thorough evaluation on full off-targets for the best
     fit_final, on_final, off_final, pen_final = fitness_components(
-        best_global[1], best_global[5]
+        best_global[1], best_global[3]
     )
     best_global = (fit_final, best_global[1], on_final, off_final, pen_final)
     return best_global[1], {"summary": best_global, "logs": logs}
-
-
-if __name__ == "__main__":
-    best_seq, info = genetic_algorithm()
-    fit, seq, on, off, pen = info["summary"]
-    print(f"Best sequence: {best_seq}")
-    print(
-        f"Fitness: {fit:.4f} | On-target: {on:.4f} |"
-        f" Off-target(top-{OFFTARGET_TOPK} mean): {off:.4f} | Penalties:"
-        f" {pen:.4f}"
-    )
-    print("Logs keys:", list(info["logs"].keys()))
 
 
 def _logo_counts(population, top_k=40):
@@ -681,5 +676,12 @@ def run_ga_stream(params: Dict[str, Any] = None) -> Iterable[Dict[str, Any]]:
 
 
 if __name__ == "__main__":
-    # run ga without server for quick test
-    genetic_algorithm()
+    best_seq, info = genetic_algorithm()
+    fit, seq, on, off, pen = info["summary"]
+    print(f"Best sequence: {best_seq}")
+    print(
+        f"Fitness: {fit:.4f} | On-target: {on:.4f} |"
+        f" Off-target(top-{OFFTARGET_TOPK} mean): {off:.4f} | Penalties:"
+        f" {pen:.4f}"
+    )
+    print("Logs keys:", list(info["logs"].keys()))
